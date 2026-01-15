@@ -12,12 +12,26 @@ Object.assign(RepairUI.prototype, {
    */
   renderForm() {
     const isEdit = !!this.currentRepair;
+
     // 新增模式要吃 AppConfig 預設值，否則 <select> 會落到第一個 option（目前是「低」）
-    const repair = this.currentRepair || {
+    const baseDefaults = {
       status: AppConfig.business.defaults.repairStatus,
       progress: AppConfig.business.defaults.progress,
       priority: AppConfig.business.defaults.priority
     };
+
+    // 新增模式可吃一次性預填（例如：詳情頁 📄 複製），但流程型欄位回到預設
+    let repair;
+    if (isEdit) {
+      repair = this.currentRepair;
+    } else {
+      const prefill = (this._newPrefill && typeof this._newPrefill === 'object') ? this._newPrefill : {};
+      repair = { ...baseDefaults, ...prefill };
+      repair.status = baseDefaults.status;
+      repair.progress = baseDefaults.progress;
+      repair.priority = baseDefaults.priority;
+    }
+
 
     // 注意：新增維修單不得帶入「上一次選擇」的預設值（避免造成誤填/誤判為內建值）
     // - 版本：V161.133 起取消 localStorage 的 recent defaults 行為
@@ -563,6 +577,9 @@ Object.assign(RepairUI.prototype, {
               <button class="btn" onclick="RepairUI.openForm('${repair.id}')">
                 ✏️ 編輯
               </button>
+              <button class="btn ghost" onclick="RepairUI.duplicateRepair('${repair.id}')">
+                📄 複製
+              </button>
               <button class="btn danger" onclick="RepairUI.confirmDelete('${repair.id}')">
                 🗑️ 刪除
               </button>
@@ -967,6 +984,35 @@ Object.assign(RepairUI.prototype, {
 
       // 維修日期（YYYY-MM-DD）
       if (typeof data.createdDate === 'string') data.createdDate = data.createdDate.trim();
+
+      // P0：資料品質（選填欄位格式驗證）
+      try {
+        const phoneRaw = (data.phone || '').toString().trim();
+        if (phoneRaw) {
+          const digits = phoneRaw.replace(/[^0-9]/g, '');
+          if (digits.length < 6 || digits.length > 20) {
+            const msg = '電話格式不正確（請輸入 6～20 位數字，可含分機/符號）';
+            if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
+            else alert(msg);
+            try { form.querySelector('input[name="phone"]')?.focus?.(); } catch (_) {}
+            return;
+          }
+        }
+
+        const emailRaw = (data.email || '').toString().trim();
+        if (emailRaw) {
+          const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw);
+          if (!ok) {
+            const msg = 'Email 格式不正確（例：name@company.com）';
+            if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
+            else alert(msg);
+            try { form.querySelector('input[name="email"]')?.focus?.(); } catch (_) {}
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('data quality check failed:', e);
+      }
 
       if (!window.RepairService) throw new Error('RepairService not found');
 

@@ -107,6 +107,7 @@
   <script src="core/user-admin.js"></script>
   <script src="core/linkage.js"></script>
   <script src="core/module-loader.js"></script>
+  <script src="core/global-search.js"></script>
 
   <!-- Customers (must load before repairs forms auto-complete) -->
   <script src="features/customers/customers.model.js"></script>
@@ -392,7 +393,10 @@
                 <div id="mobile-header-title" class="brand">📋 維修管理</div>
                 <div id="mobile-header-subtitle" class="muted">${AppConfig.getFullVersion()}</div>
               </div>
-              <div style="margin-left:auto"><button class="btn ghost" onclick="window.logout()">登出</button></div>
+              <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+                <button class="btn ghost" onclick="window.GlobalSearch?.open?.()" title="全域快速搜尋">🔎</button>
+                <button class="btn ghost" onclick="window.logout()">登出</button>
+              </div>
             </header>
 
             <div id="main-content"></div>

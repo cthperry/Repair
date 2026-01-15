@@ -333,6 +333,7 @@
   <script src="core/user-admin.js"></script>
   <script src="core/linkage.js"></script>
   <script src="core/module-loader.js"></script>
+  <script src="core/global-search.js"></script>
   
   <!-- ========================================
        客戶管理模組（登入後載入）
@@ -684,6 +685,7 @@ async navigate(route) {
                   <div id="header-subtitle" class="header-subtitle">${AppConfig.getFullVersion()}</div>
                 </div>
                 <div class="header-right">
+                  <button class="btn ghost" onclick="window.GlobalSearch?.open?.()" title="全域快速搜尋 (Ctrl+K)">🔎 搜尋</button>
                   <button class="btn ghost" onclick="window.logout()">登出</button>
                 </div>
               </header>

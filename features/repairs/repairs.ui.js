@@ -76,6 +76,9 @@ class RepairUI {
     // 事件委派（P2-2）：列表/詳情按鈕統一由單一 click handler 處理
     this._delegatedClickHandler = null;
 
+    // 新增表單：複製/預填資料（不影響編輯模式）
+    this._newPrefill = null;
+
   }
 
   // ========================================
@@ -3282,9 +3285,14 @@ ${hint}` : ''}
   /**
    * 開啟新增表單
    */
-  static async openForm(repairId = null) {
+  static async openForm(repairId = null, options = null) {
     const instance = window.repairUI;
     instance.currentRepair = repairId ? window.RepairService.get(repairId) : null;
+
+    // 新增模式：允許以預填資料開啟表單（例如：複製維修單）
+    const opts = (options && typeof options === 'object') ? options : {};
+    instance._newPrefill = (!repairId && opts.prefill && typeof opts.prefill === 'object') ? { ...opts.prefill } : null;
+
 
     const modal = document.getElementById('repair-modal');
     const content = document.getElementById('repair-modal-content');
@@ -3368,8 +3376,52 @@ ${hint}` : ''}
 
     // afterRenderForm 可能會更新 chips/DOM，最後再確保維持在頂部
     resetModalScroll();
+
+    // 清掉一次性預填（避免下一次新增被沿用）
+    try { instance._newPrefill = null; } catch (_) {}
   }
-  
+
+  /**
+   * 複製維修單（從詳情頁：一鍵帶入主要欄位，並回到新增預設狀態）
+   */
+  static duplicateRepair(repairId) {
+    try {
+      const src = window.RepairService?.get?.(repairId);
+      if (!src) {
+        const msg = '找不到維修記錄（無法複製）';
+        if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
+        else alert(msg);
+        return;
+      }
+
+      const todayStr = (window.RepairModel && typeof window.RepairModel.getTaiwanDateString === 'function')
+        ? window.RepairModel.getTaiwanDateString(new Date())
+        : new Date().toISOString().slice(0, 10);
+
+      // 僅帶入「內容型」欄位；流程型欄位（狀態/進度/優先級/零件勾選）回到新增預設
+      const prefill = {
+        customer: (src.customer || '').toString(),
+        contact: (src.contact || '').toString(),
+        phone: (src.phone || '').toString(),
+        email: (src.email || '').toString(),
+        productLine: (src.productLine || '').toString(),
+        machine: (src.machine || '').toString(),
+        serialNumber: (src.serialNumber || '').toString(),
+        issue: (src.issue || '').toString(),
+        content: (src.content || '').toString(),
+        notes: (src.notes || '').toString(),
+        createdDate: todayStr
+      };
+
+      RepairUI.openForm(null, { prefill });
+    } catch (e) {
+      console.error(e);
+      const msg = '複製失敗：' + (e?.message || e);
+      if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'error' });
+      else alert(msg);
+    }
+  }
+
   /**
    * 開啟詳情
    */

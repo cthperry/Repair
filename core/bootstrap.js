@@ -312,6 +312,19 @@ class Bootstrap {
    */
   bindGlobalShortcuts() {
     document.addEventListener('keydown', (e) => {
+      // Ctrl+K / Cmd+K: 全域快速搜尋（登入後才生效）
+      try {
+        const authed = ((window.AppState && typeof window.AppState.isAuthenticated === 'function') ? window.AppState.isAuthenticated() : window.isAuthenticated);
+        const key = (e.key || '').toString().toLowerCase();
+        const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || '');
+        const hit = (authed && key === 'k' && (e.ctrlKey || (isMac && e.metaKey)));
+        if (hit) {
+          e.preventDefault();
+          try { window.GlobalSearch?.open?.(); } catch (_) {}
+          return;
+        }
+      } catch (_) {}
+
       // Ctrl+N: 新增維修單（登入後才生效）
       if (e.ctrlKey && e.key === 'n' && ((window.AppState && typeof window.AppState.isAuthenticated === 'function') ? window.AppState.isAuthenticated() : window.isAuthenticated)) {
         e.preventDefault();
