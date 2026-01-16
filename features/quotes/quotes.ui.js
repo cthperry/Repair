@@ -1659,7 +1659,7 @@ async exportQuotePdf(quoteId) {
   async handleCreateFromRepair(event) {
     event.preventDefault();
     const form = event.target;
-    const data = Object.fromEntries(new FormData(form).entries());
+    const data = Object.fromEntries(new FormData(event.target).entries());
     const rid = (data.repairId || '').trim();
     if (!rid) {
       const msg = '請選擇維修單';
@@ -1693,7 +1693,7 @@ async exportQuotePdf(quoteId) {
   async handleSaveQuote(event) {
     event.preventDefault();
     const form = event.target;
-    const data = Object.fromEntries(new FormData(form).entries());
+    const data = Object.fromEntries(new FormData(event.target).entries());
     const id = (data.id || '').trim();
     const q = window.QuoteService.get(id);
     if (!q) return;
@@ -1713,45 +1713,44 @@ async exportQuotePdf(quoteId) {
       const qty = Number.isFinite(qtyNum) ? qtyNum : 1;
       const unitPrice = Number.isFinite(priceNum) ? priceNum : 0;
 
-      const nameT = (name || '').trim();
-      const mpnT = (mpn || '').trim();
-      const vendorT = (vendor || '').trim();
+      // P0：空白列不寫入 + 資料品質檢查
+      const nameT = (name || '').toString().trim();
+      const mpnT = (mpn || '').toString().trim();
+      const vendorT = (vendor || '').toString().trim();
+      const unitT = (unit || '').toString().trim();
 
-      // 判斷是否為「完全空白列」：欄位全空 + qty=1 + unitPrice=0
-      const isEmptyRow = !nameT && !mpnT && !vendorT && qty === 1 && unitPrice === 0;
+      const isEmptyRow = !nameT && !mpnT && !vendorT && (!unitT || unitT === 'pcs') && qty === 1 && unitPrice === 0;
       if (isEmptyRow) continue;
 
-      // P0：資料品質（品名必填 / 數值合法）
       if (!nameT) {
-        const msg = `第 ${i + 1} 列：品名不可空白`;
+        const msg = `第 ${i + 1} 列：請填寫零件名稱`;
         if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
         else alert(msg);
-        try { form.querySelector(`[name=\"name_${i}\"]`)?.focus?.(); } catch (_) {}
+        try { form.querySelector(`[name="name_${i}"]`)?.focus?.(); } catch (_) {}
         return;
       }
 
-      if (!Number.isFinite(qtyNum) || qtyNum < 1 || Math.floor(qtyNum) !== qtyNum) {
-        const msg = `第 ${i + 1} 列：數量需為 ≥ 1 的整數`;
+      if (!Number.isFinite(qty) || qty < 1 || Math.floor(qty) !== qty) {
+        const msg = `第 ${i + 1} 列：數量需為整數且至少 1`;
         if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
         else alert(msg);
-        try { form.querySelector(`[name=\"qty_${i}\"]`)?.focus?.(); } catch (_) {}
+        try { form.querySelector(`[name="qty_${i}"]`)?.focus?.(); } catch (_) {}
         return;
       }
 
-      if (!Number.isFinite(priceNum) || priceNum < 0) {
-        const msg = `第 ${i + 1} 列：單價不可小於 0`;
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        const msg = `第 ${i + 1} 列：單價需為 0 或正數`;
         if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
         else alert(msg);
-        try { form.querySelector(`[name=\"unitPrice_${i}\"]`)?.focus?.(); } catch (_) {}
+        try { form.querySelector(`[name="unitPrice_${i}"]`)?.focus?.(); } catch (_) {}
         return;
       }
 
-      items.push({ name: nameT, mpn: mpnT, vendor: vendorT, unit, qty: Math.floor(qtyNum), unitPrice: priceNum });
+      items.push({ name: nameT, mpn: mpnT, vendor: vendorT, unit: (unitT || 'pcs'), qty, unitPrice });
     }
 
-
-    if (items.length === 0) {
-      const msg = '至少需輸入 1 筆零件（品名/MPN/供應商其一）';
+    if (!items.length) {
+      const msg = '請至少輸入一筆報價項目';
       if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
       else alert(msg);
       return;

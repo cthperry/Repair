@@ -211,10 +211,21 @@ class SettingsUI {
           <div class="settings-card-header card-head">
             <div>
               <div class="settings-card-title card-title">顯示偏好</div>
-              <div class="settings-card-meta muted">（目前僅提供列表密度）</div>
+              <div class="settings-card-meta muted">列表密度、簡易模式（可在此切換）</div>
             </div>
           </div>
           <div class="settings-card-body card-body">
+            <div class="settings-row settings-row-top">
+              <label class="settings-label">簡易模式</label>
+              <div class="settings-col">
+                <label class="form-checkbox">
+                  <input type="checkbox" id="settings-simple-mode" ${settings.simpleMode ? 'checked' : ''} />
+                  <span>啟用精簡介面（隱藏進階模組）</span>
+                </label>
+                <div class="settings-hint muted">啟用後：側邊選單僅保留「維修 / 客戶 / 週報 / 指南 / 設定」，全域搜尋也會只搜尋保留模組。</div>
+              </div>
+            </div>
+
             <div class="settings-row">
               <label class="settings-label">列表密度</label>
               <select class="input" id="settings-density">
@@ -866,6 +877,7 @@ ${email}
     const rec = document.getElementById('settings-weekly-recipients');
     const sig = document.getElementById('settings-signature');
     const den = document.getElementById('settings-density');
+    const sm = document.getElementById('settings-simple-mode');
 
     const topN = document.getElementById('settings-pinned-topn');
     const addInput = document.getElementById('settings-pinned-add');
@@ -878,6 +890,7 @@ ${email}
     if (rec) rec.addEventListener('input', onChange);
     if (sig) sig.addEventListener('input', onChange);
     if (den) den.addEventListener('change', onChange);
+    if (sm) sm.addEventListener('change', onChange);
 
     // pinned companies
     if (topN) {
@@ -965,11 +978,13 @@ ${email}
     const rec = document.getElementById('settings-weekly-recipients')?.value || '';
     const sig = document.getElementById('settings-signature')?.value || '';
     const den = document.getElementById('settings-density')?.value || 'comfortable';
+    const simpleMode = !!document.getElementById('settings-simple-mode')?.checked;
 
     await window.SettingsService.update({
       weeklyRecipients: rec,
       signature: sig,
       uiDensity: den,
+      simpleMode: simpleMode,
       pinnedTopN: this._pinnedTopN,
       pinnedCompanies: this._pinnedCompanies,
 

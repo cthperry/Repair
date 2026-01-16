@@ -93,6 +93,7 @@
   <script src="core/utils/strings.js"></script>
   <script src="core/utils/time.js"></script>
   <script src="core/utils/dom.js"></script>
+  <script src="core/utils/events.js"></script>
 <script src="core/utils.js"></script>
   <script src="core/registry.js"></script>
   <script src="core/app-state.js"></script>
@@ -244,6 +245,18 @@
         const allowed = ['repairs', 'machines', 'maintenance', 'customers', 'parts', 'quotes', 'orders', 'kb', 'weekly', 'guide', 'settings'];
         if (!allowed.includes(route)) route = 'repairs';
 
+        // 簡易模式：阻擋進階模組導覽（避免使用者誤入複雜流程）
+        try {
+          const simpleOn = (document.body && document.body.dataset && document.body.dataset.mode === 'simple');
+          if (simpleOn) {
+            const simpleAllowed = ['repairs', 'customers', 'weekly', 'guide', 'settings'];
+            if (!simpleAllowed.includes(route)) {
+              try { window.UI && window.UI.toast && window.UI.toast('簡易模式已隱藏此模組，可到「設定」關閉簡易模式後使用', { type: 'info' }); } catch (_) {}
+              route = 'repairs';
+            }
+          }
+        } catch (_) {}
+
         this.isNavigating = true;
         try {
           // 依路由套用模組 Accent（避免全站視覺過度單調）
@@ -365,23 +378,55 @@
         try { document.body.dataset.density = v; } catch (_) {}
       }
 
+      setSimpleMode(enabled){
+        const on = !!enabled;
+        try { document.body.dataset.mode = on ? 'simple' : 'full'; } catch (_) {}
+        try {
+          const badge = document.getElementById('mode-badge');
+          if (badge) badge.style.display = on ? 'inline-flex' : 'none';
+        } catch (_) {}
+
+        const hideRoutes = ['machines', 'maintenance', 'parts', 'quotes', 'orders', 'kb'];
+        try {
+          document.querySelectorAll('.tabbar [data-route]').forEach(el => {
+            const r = el.getAttribute('data-route');
+            if (!r) return;
+            if (hideRoutes.includes(r)) {
+              el.style.display = on ? 'none' : '';
+            }
+          });
+        } catch (_) {}
+
+        try {
+          const allowed = ['repairs', 'customers', 'weekly', 'guide', 'settings'];
+          const cur = (window.AppRouter && window.AppRouter.current) ? String(window.AppRouter.current) : '';
+          if (on && cur && !allowed.includes(cur)) {
+            window.AppRouter.navigate('repairs');
+          }
+        } catch (_) {}
+      }
+
       async applyUIPreferences(){
         let density = 'comfortable';
+        let simpleMode = false;
         try {
           const ss = (typeof window._svc === 'function' ? window._svc('SettingsService') : window.SettingsService);
           if (ss?.getSettings) {
             const s = await ss.getSettings();
             density = s?.uiDensity || 'comfortable';
+            simpleMode = !!s?.simpleMode;
           }
         } catch (e) {
           console.warn('applyUIPreferences failed:', e);
         }
         this.setDensity(density);
+        this.setSimpleMode(simpleMode);
 
         if (!this._prefBound) {
           this._prefBound = true;
           window.addEventListener('settings:updated', (ev) => {
             this.setDensity(ev?.detail?.uiDensity);
+            this.setSimpleMode(!!ev?.detail?.simpleMode);
           });
         }
       }
@@ -391,7 +436,10 @@
             <header>
               <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
                 <div id="mobile-header-title" class="brand">📋 維修管理</div>
-                <div id="mobile-header-subtitle" class="muted">${AppConfig.getFullVersion()}</div>
+                <div class="muted" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                  <span id="mobile-header-subtitle">${AppConfig.getFullVersion()}</span>
+                  <span id="mode-badge" class="mode-badge" style="display:none">簡易模式</span>
+                </div>
               </div>
               <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
                 <button class="btn ghost" onclick="window.GlobalSearch?.open?.()" title="全域快速搜尋">🔎</button>

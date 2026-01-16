@@ -311,6 +311,8 @@ class Bootstrap {
    * 綁定全域快捷鍵
    */
   bindGlobalShortcuts() {
+    if (this._shortcutsBound) return;
+    this._shortcutsBound = true;
     document.addEventListener('keydown', (e) => {
       // Ctrl+K / Cmd+K: 全域快速搜尋（登入後才生效）
       try {

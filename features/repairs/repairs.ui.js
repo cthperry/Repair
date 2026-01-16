@@ -76,8 +76,10 @@ class RepairUI {
     // 事件委派（P2-2）：列表/詳情按鈕統一由單一 click handler 處理
     this._delegatedClickHandler = null;
 
-    // 新增表單：複製/預填資料（不影響編輯模式）
-    this._newPrefill = null;
+    // CodeOpt：事件清理控制（避免重複綁定/記憶體殘留）
+    this._formAC = null;
+    this._companyDropdownAC = null;
+    this._contactDropdownAC = null;
 
   }
 
@@ -447,6 +449,14 @@ class RepairUI {
 
     // 事件委派（P2-2）：列表/詳情按鈕統一由單一 click handler 處理
     this._delegatedClickHandler = null;
+
+    // CodeOpt：若存在事件控制器，先 abort 再釋放引用（避免殘留）
+    try { if (this._formAC && typeof this._formAC.abort === 'function') this._formAC.abort(); } catch (_) {}
+    try { if (this._companyDropdownAC && typeof this._companyDropdownAC.abort === 'function') this._companyDropdownAC.abort(); } catch (_) {}
+    try { if (this._contactDropdownAC && typeof this._contactDropdownAC.abort === 'function') this._contactDropdownAC.abort(); } catch (_) {}
+    this._formAC = null;
+    this._companyDropdownAC = null;
+    this._contactDropdownAC = null;
   }
 
   // ========================================
@@ -1963,6 +1973,9 @@ ${hint}` : ''}
       if (el && el.parentNode) el.parentNode.removeChild(el);
       this._companyDropdownEl = null;
 
+      try { if (this._companyDropdownAC && typeof this._companyDropdownAC.abort === 'function') this._companyDropdownAC.abort(); } catch (_) {}
+      this._companyDropdownAC = null;
+
       if (this._companyDropdownScrollHandler) {
         window.removeEventListener('scroll', this._companyDropdownScrollHandler, true);
         window.removeEventListener('resize', this._companyDropdownScrollHandler, true);
@@ -2114,11 +2127,29 @@ ${hint}` : ''}
       document.body.appendChild(dd);
       this._companyDropdownEl = dd;
 
+      // CodeOpt：用 AbortController 管理 window/document 事件，避免重複綁定殘留
+      try { if (this._companyDropdownAC && typeof this._companyDropdownAC.abort === 'function') this._companyDropdownAC.abort(); } catch (_) {}
+      this._companyDropdownAC = (window.EventUtils && typeof window.EventUtils.createController === 'function')
+        ? window.EventUtils.createController()
+        : null;
+
+      const onDD = (el, evt, fn, opts) => {
+        try {
+          if (window.EventUtils && typeof window.EventUtils.on === 'function') {
+            window.EventUtils.on(el, evt, fn, opts, this._companyDropdownAC);
+          } else if (el) {
+            el.addEventListener(evt, fn, opts || false);
+          }
+        } catch (_) {
+          try { el && el.addEventListener(evt, fn, opts || false); } catch (_) {}
+        }
+      };
+
       this._companyDropdownScrollHandler = () => {
         try { this._closeCompanyDropdown(true); } catch (_) {}
       };
-      window.addEventListener('scroll', this._companyDropdownScrollHandler, true);
-      window.addEventListener('resize', this._companyDropdownScrollHandler, true);
+      onDD(window, 'scroll', this._companyDropdownScrollHandler, { capture: true, passive: true });
+      onDD(window, 'resize', this._companyDropdownScrollHandler, { capture: true, passive: true });
 
       this._companyDropdownOutsideHandler = (e) => {
         try {
@@ -2130,12 +2161,12 @@ ${hint}` : ''}
           this._closeCompanyDropdown(true);
         }
       };
-      document.addEventListener('mousedown', this._companyDropdownOutsideHandler, true);
+      onDD(document, 'mousedown', this._companyDropdownOutsideHandler, { capture: true });
 
       this._companyDropdownKeyHandler = (e) => {
         if (e && e.key === 'Escape') this._closeCompanyDropdown(true);
       };
-      document.addEventListener('keydown', this._companyDropdownKeyHandler, true);
+      onDD(document, 'keydown', this._companyDropdownKeyHandler, { capture: true });
 
     } catch (e) {
       console.warn('toggleCompanyDropdown failed:', e);
@@ -2162,6 +2193,9 @@ ${hint}` : ''}
       const el = this._contactDropdownEl;
       if (el && el.parentNode) el.parentNode.removeChild(el);
       this._contactDropdownEl = null;
+
+      try { if (this._contactDropdownAC && typeof this._contactDropdownAC.abort === 'function') this._contactDropdownAC.abort(); } catch (_) {}
+      this._contactDropdownAC = null;
 
       // 清理：滾動/縮放監聽（避免下拉選單「卡住」在畫面上）
       if (this._contactDropdownScrollHandler) {
@@ -2279,12 +2313,30 @@ ${hint}` : ''}
       document.body.appendChild(dd);
       this._contactDropdownEl = dd;
 
+      // CodeOpt：用 AbortController 管理 window/document 事件，避免重複綁定殘留
+      try { if (this._contactDropdownAC && typeof this._contactDropdownAC.abort === 'function') this._contactDropdownAC.abort(); } catch (_) {}
+      this._contactDropdownAC = (window.EventUtils && typeof window.EventUtils.createController === 'function')
+        ? window.EventUtils.createController()
+        : null;
+
+      const onDDContact = (el, evt, fn, opts) => {
+        try {
+          if (window.EventUtils && typeof window.EventUtils.on === 'function') {
+            window.EventUtils.on(el, evt, fn, opts, this._contactDropdownAC);
+          } else if (el) {
+            el.addEventListener(evt, fn, opts || false);
+          }
+        } catch (_) {
+          try { el && el.addEventListener(evt, fn, opts || false); } catch (_) {}
+        }
+      };
+
       // 任何滾動/縮放時關閉（下拉選單使用 position:fixed，避免表單捲動後選單位置不對而像「卡住」）
       this._contactDropdownScrollHandler = () => {
         try { this._closeContactDropdown(true); } catch (_) {}
       };
-      window.addEventListener('scroll', this._contactDropdownScrollHandler, true);
-      window.addEventListener('resize', this._contactDropdownScrollHandler, true);
+      onDDContact(window, 'scroll', this._contactDropdownScrollHandler, { capture: true, passive: true });
+      onDDContact(window, 'resize', this._contactDropdownScrollHandler, { capture: true, passive: true });
 
       // 點擊外部關閉
       this._contactDropdownOutsideHandler = (e) => {
@@ -2297,12 +2349,12 @@ ${hint}` : ''}
           this._closeContactDropdown(true);
         }
       };
-      document.addEventListener('mousedown', this._contactDropdownOutsideHandler, true);
+      onDDContact(document, 'mousedown', this._contactDropdownOutsideHandler, { capture: true });
 
       this._contactDropdownKeyHandler = (e) => {
         if (e && e.key === 'Escape') this._closeContactDropdown(true);
       };
-      document.addEventListener('keydown', this._contactDropdownKeyHandler, true);
+      onDDContact(document, 'keydown', this._contactDropdownKeyHandler, { capture: true });
 
     } catch (e) {
       console.warn('toggleContactDropdown failed:', e);
@@ -2330,6 +2382,24 @@ ${hint}` : ''}
    */
   async afterRenderForm() {
     // event binding (avoid duplicate)
+    // CodeOpt：以 AbortController 管理表單事件，避免重複綁定與殘留
+    try { if (this._formAC && typeof this._formAC.abort === 'function') this._formAC.abort(); } catch (_) {}
+    this._formAC = (window.EventUtils && typeof window.EventUtils.createController === 'function')
+      ? window.EventUtils.createController()
+      : null;
+
+    const onForm = (el, evt, fn, opts) => {
+      try {
+        if (window.EventUtils && typeof window.EventUtils.on === 'function') {
+          window.EventUtils.on(el, evt, fn, opts, this._formAC);
+        } else if (el) {
+          el.addEventListener(evt, fn, opts || false);
+        }
+      } catch (_) {
+        try { el && el.addEventListener(evt, fn, opts || false); } catch (_) {}
+      }
+    };
+
     const pinBtn = document.getElementById('btn-pin-company');
     const histBtn = document.getElementById('btn-history-company');
     const customerEl = document.querySelector('#repair-form input[name="customer"]');
@@ -2361,18 +2431,18 @@ ${hint}` : ''}
         if (!company) return;
         await this.togglePinnedCompany(company);
       };
-      pinBtn.addEventListener('click', (window.guard ? window.guard(onPin, 'RepairsForm') : onPin));
+      onForm(pinBtn, 'click', (window.guard ? window.guard(onPin, 'RepairsForm') : onPin));
     }
 
     if (histBtn && !histBtn.dataset.bound) {
       histBtn.dataset.bound = '1';
       const onHist = () => { this.openHistoryPicker(); };
-      histBtn.addEventListener('click', (window.guard ? window.guard(onHist, 'RepairsForm') : onHist));
+      onForm(histBtn, 'click', (window.guard ? window.guard(onHist, 'RepairsForm') : onHist));
     }
 
     if (customerEl && !customerEl.dataset.boundQuick) {
       customerEl.dataset.boundQuick = '1';
-      customerEl.addEventListener('input', () => {
+      onForm(customerEl, 'input', () => {
         this.refreshPinButtonState();
         // 使用 debounce：避免每次鍵入都重算聯絡人清單
         try {
@@ -2383,11 +2453,35 @@ ${hint}` : ''}
         } catch (_) {}
         try { if (typeof this.updateSerialHints === 'function') this.updateSerialHints(); } catch (_) {}
       });
-      customerEl.addEventListener('change', () => {
+      onForm(customerEl, 'change', () => {
         this.refreshPinButtonState();
         // 變更（含 datalist 選取）時立即刷新聯絡人清單並帶入
         try { this.handleCustomerPick({ target: customerEl }); } catch (_) {}
         try { if (typeof this.updateSerialHints === 'function') this.updateSerialHints(); } catch (_) {}
+      });
+
+      // P0：公司已選定時，點一下輸入框即可開啟清單（免先刪除）
+      onForm(customerEl, 'click', () => {
+        try {
+          const v = (customerEl.value || '').toString().trim();
+          const picked = (customerEl.dataset && customerEl.dataset.companyPicked === '1');
+          if (!v || !picked) return;
+          // 若清單已開啟則不重複開（避免閃爍）
+          if (this._companyDropdownEl) return;
+          setTimeout(() => { try { this.toggleCompanyDropdown(); } catch (_) {} }, 0);
+        } catch (_) {}
+      });
+
+      // P0：鍵盤快速開啟公司清單（F4 / Alt+↓）
+      onForm(customerEl, 'keydown', (e) => {
+        try {
+          if (!e) return;
+          const k = e.key;
+          if (k === 'F4' || (k === 'ArrowDown' && e.altKey)) {
+            e.preventDefault();
+            this.toggleCompanyDropdown();
+          }
+        } catch (_) {}
       });
     }
 
@@ -2416,11 +2510,18 @@ ${hint}` : ''}
       console.warn('initEquipmentPicker failed in afterRenderForm:', e);
     }
 
+    // P0：若為「複製」流程，帶入來源欄位（需在設備選擇器初始化後）
+    try {
+      if (typeof this._applyDuplicatePrefill === 'function') this._applyDuplicatePrefill();
+    } catch (e) {
+      console.warn('_applyDuplicatePrefill failed in afterRenderForm:', e);
+    }
+
     // 序號提示 chips click（同公司+同機型 最近序號）
     const serialChipsEl = document.getElementById('serial-suggest-chips');
     if (serialChipsEl && !serialChipsEl.dataset.bound) {
       serialChipsEl.dataset.bound = '1';
-      serialChipsEl.addEventListener('click', (e) => {
+      onForm(serialChipsEl, 'click', (e) => {
         const btn = e.target?.closest?.('button[data-serial]');
         if (!btn) return;
         const serial = (btn.getAttribute('data-serial') || '').toString();
@@ -3285,14 +3386,9 @@ ${hint}` : ''}
   /**
    * 開啟新增表單
    */
-  static async openForm(repairId = null, options = null) {
+  static async openForm(repairId = null) {
     const instance = window.repairUI;
     instance.currentRepair = repairId ? window.RepairService.get(repairId) : null;
-
-    // 新增模式：允許以預填資料開啟表單（例如：複製維修單）
-    const opts = (options && typeof options === 'object') ? options : {};
-    instance._newPrefill = (!repairId && opts.prefill && typeof opts.prefill === 'object') ? { ...opts.prefill } : null;
-
 
     const modal = document.getElementById('repair-modal');
     const content = document.getElementById('repair-modal-content');
@@ -3376,47 +3472,19 @@ ${hint}` : ''}
 
     // afterRenderForm 可能會更新 chips/DOM，最後再確保維持在頂部
     resetModalScroll();
-
-    // 清掉一次性預填（避免下一次新增被沿用）
-    try { instance._newPrefill = null; } catch (_) {}
   }
-
+  
   /**
-   * 複製維修單（從詳情頁：一鍵帶入主要欄位，並回到新增預設狀態）
+   * 詳情 → 📄 複製：複製成新維修單（開啟新增表單並帶入必要欄位）
    */
-  static duplicateRepair(repairId) {
+  static async duplicateRepair(repairId) {
     try {
-      const src = window.RepairService?.get?.(repairId);
-      if (!src) {
-        const msg = '找不到維修記錄（無法複製）';
-        if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
-        else alert(msg);
-        return;
-      }
-
-      const todayStr = (window.RepairModel && typeof window.RepairModel.getTaiwanDateString === 'function')
-        ? window.RepairModel.getTaiwanDateString(new Date())
-        : new Date().toISOString().slice(0, 10);
-
-      // 僅帶入「內容型」欄位；流程型欄位（狀態/進度/優先級/零件勾選）回到新增預設
-      const prefill = {
-        customer: (src.customer || '').toString(),
-        contact: (src.contact || '').toString(),
-        phone: (src.phone || '').toString(),
-        email: (src.email || '').toString(),
-        productLine: (src.productLine || '').toString(),
-        machine: (src.machine || '').toString(),
-        serialNumber: (src.serialNumber || '').toString(),
-        issue: (src.issue || '').toString(),
-        content: (src.content || '').toString(),
-        notes: (src.notes || '').toString(),
-        createdDate: todayStr
-      };
-
-      RepairUI.openForm(null, { prefill });
+      const instance = window.repairUI;
+      if (!instance || typeof instance.duplicateRepair !== 'function') return;
+      await instance.duplicateRepair(repairId);
     } catch (e) {
-      console.error(e);
-      const msg = '複製失敗：' + (e?.message || e);
+      console.warn('RepairUI.duplicateRepair wrapper failed:', e);
+      const msg = '複製失敗';
       if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'error' });
       else alert(msg);
     }
@@ -4331,6 +4399,148 @@ static openDetail(repairId) {
     try { window.OrdersUI?.openDetail?.(target.id); } catch (_) {}
   }
 }
+
+  /**
+   * 複製維修單：開啟新增表單並帶入來源欄位
+   * - 不複製：狀態/進度、零件追蹤勾選、時間戳、歷史
+   */
+  async duplicateRepair(repairId) {
+    try {
+      const rid = (repairId || '').toString().trim();
+      if (!rid) return;
+
+      let src = null;
+      try {
+        if (window.RepairService) {
+          if (typeof window.RepairService.get === 'function') src = window.RepairService.get(rid);
+          else if (typeof window.RepairService.getById === 'function') src = window.RepairService.getById(rid);
+          else if (typeof window.RepairService.getAll === 'function') {
+            const arr = window.RepairService.getAll();
+            if (Array.isArray(arr)) src = arr.find(x => x && x.id === rid);
+          }
+        }
+      } catch (_) {}
+
+      if (!src) {
+        const msg = '找不到要複製的維修單';
+        if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
+        else alert(msg);
+        return;
+      }
+
+      // 深拷貝避免後續操作污染原始資料
+      try {
+        this._dupSourceRepair = (typeof structuredClone === 'function') ? structuredClone(src) : JSON.parse(JSON.stringify(src));
+      } catch (_) {
+        this._dupSourceRepair = { ...src };
+      }
+
+      await RepairUI.openForm(null);
+      if (window.UI && typeof window.UI.toast === 'function') window.UI.toast('已建立複製草稿，請確認後儲存', { type: 'info' });
+
+    } catch (e) {
+      console.warn('duplicateRepair failed:', e);
+      const msg = e && e.message ? `複製失敗：${e.message}` : '複製失敗';
+      if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'error' });
+      else alert(msg);
+    }
+  }
+
+  _applyDuplicatePrefill() {
+    try {
+      // 僅在「新增」表單（currentRepair 為 null）才允許帶入
+      if (this.currentRepair) return false;
+      if (!this._dupSourceRepair) return false;
+
+      const src = this._dupSourceRepair;
+      this._dupSourceRepair = null;
+
+      const form = document.getElementById('repair-form');
+      if (!form) return false;
+
+      const setField = (name, value, fire = true) => {
+        const el = form.querySelector(`[name="${name}"]`);
+        if (!el) return;
+        el.value = (value ?? '').toString();
+        if (fire) {
+          try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+          try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+        }
+      };
+
+      // 1) 客戶/聯絡人（先帶入公司，觸發聯絡人清單刷新）
+      setField('customer', src.customer || '', true);
+      setField('contact', src.contact || '', true);
+
+      // 2) 電話/Email（覆寫為來源值）
+      const phoneEl = form.querySelector('[name="phone"]');
+      if (phoneEl) phoneEl.value = (src.phone || '').toString();
+      const emailEl = form.querySelector('[name="email"]');
+      if (emailEl) emailEl.value = (src.email || '').toString();
+
+      // 3) 設備產品線/機型
+      const plEl = form.querySelector('[name="productLine"]');
+      if (plEl) {
+        plEl.value = (src.productLine || '').toString();
+        try { plEl.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+      }
+
+      const machineVal = (src.machine || '').toString();
+      if (machineVal) {
+        const sel = document.getElementById('machine-select');
+        const manual = document.getElementById('machine-manual');
+        const final = document.getElementById('machine-final');
+
+        if (sel && final) {
+          const hasOpt = Array.from(sel.options || []).some(o => (o && o.value === machineVal));
+          if (hasOpt) {
+            sel.value = machineVal;
+            try { sel.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+          } else {
+            sel.value = '__manual__';
+            try { sel.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+            if (manual) {
+              manual.value = machineVal;
+              try { manual.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+            } else {
+              final.value = machineVal;
+            }
+          }
+        } else {
+          // fallback: hidden field
+          const m = form.querySelector('[name="machine"]');
+          if (m) m.value = machineVal;
+        }
+      }
+
+      // 4) 其他主要欄位
+      setField('serialNumber', src.serialNumber || '', true);
+      setField('issue', src.issue || '', false);
+
+      const contentEl = form.querySelector('[name="content"]');
+      if (contentEl) contentEl.value = (src.content || '').toString();
+      const notesEl = form.querySelector('[name="notes"]');
+      if (notesEl) notesEl.value = (src.notes || '').toString();
+
+      // 5) 優先級（可選）
+      try {
+        const pr = (src.priority || '').toString();
+        if (pr) {
+          const prEl = form.querySelector('[name="priority"]');
+          if (prEl) prEl.value = pr;
+        }
+      } catch (_) {}
+
+      // 聚焦問題描述，方便立即調整
+      try { form.querySelector('[name="issue"]')?.focus?.(); } catch (_) {}
+
+      return true;
+    } catch (e) {
+      console.warn('_applyDuplicatePrefill failed:', e);
+      return false;
+    }
+  }
+
 
 }
 

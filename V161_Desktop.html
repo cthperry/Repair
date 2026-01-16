@@ -310,6 +310,7 @@
   <script src="core/utils/strings.js"></script>
   <script src="core/utils/time.js"></script>
   <script src="core/utils/dom.js"></script>
+  <script src="core/utils/events.js"></script>
 <!-- Step 1.2: 共用工具（日期/服務初始化等） -->
   <script src="core/utils.js"></script>
   <script src="core/registry.js"></script>
@@ -491,6 +492,18 @@ async navigate(route) {
 
   const allowed = ['repairs', 'machines', 'maintenance', 'customers', 'parts', 'quotes', 'orders', 'kb', 'weekly', 'guide', 'settings'];
   if (!allowed.includes(route)) route = 'repairs';
+
+  // 簡易模式：阻擋進階模組導覽（避免使用者誤入複雜流程）
+  try {
+    const simpleOn = (document.body && document.body.dataset && document.body.dataset.mode === 'simple');
+    if (simpleOn) {
+      const simpleAllowed = ['repairs', 'customers', 'weekly', 'guide', 'settings'];
+      if (!simpleAllowed.includes(route)) {
+        try { window.UI && window.UI.toast && window.UI.toast('簡易模式已隱藏此模組，可到「設定」關閉簡易模式後使用', { type: 'info' }); } catch (_) {}
+        route = 'repairs';
+      }
+    }
+  } catch (_) {}
 
   this.isNavigating = true;
   try {
@@ -674,7 +687,7 @@ async navigate(route) {
               </nav>
 
               <div class="sidebar-footer">
-                <div class="muted">${AppConfig.getFullVersion()}</div>
+                <div class="muted">${AppConfig.getFullVersion()} <span id="mode-badge" class="mode-badge" style="display:none">簡易模式</span></div>
               </div>
             </aside>
             
@@ -704,25 +717,59 @@ async navigate(route) {
         try { document.body.dataset.density = v; } catch (_) {}
       }
 
+      setSimpleMode(enabled){
+        const on = !!enabled;
+        try { document.body.dataset.mode = on ? 'simple' : 'full'; } catch (_) {}
+        try {
+          const badge = document.getElementById('mode-badge');
+          if (badge) badge.style.display = on ? 'inline-flex' : 'none';
+        } catch (_) {}
+
+        // 隱藏進階模組（仍可在設定關閉簡易模式後使用）
+        const hideRoutes = ['machines', 'maintenance', 'parts', 'quotes', 'orders', 'kb'];
+        try {
+          document.querySelectorAll('.sidebar-nav [data-route]').forEach(el => {
+            const r = el.getAttribute('data-route');
+            if (!r) return;
+            if (hideRoutes.includes(r)) {
+              el.style.display = on ? 'none' : '';
+            }
+          });
+        } catch (_) {}
+
+        // 若目前停在被隱藏模組，自動導回維修管理
+        try {
+          const allowed = ['repairs', 'customers', 'weekly', 'guide', 'settings'];
+          const cur = (window.AppRouter && window.AppRouter.current) ? String(window.AppRouter.current) : '';
+          if (on && cur && !allowed.includes(cur)) {
+            window.AppRouter.navigate('repairs');
+          }
+        } catch (_) {}
+      }
+
       async applyUIPreferences(){
         // 預設：舒適
         let density = 'comfortable';
+        let simpleMode = false;
         try {
           const ss = (typeof window._svc === 'function' ? window._svc('SettingsService') : window.SettingsService);
           if (ss?.getSettings) {
             const s = await ss.getSettings();
             density = s?.uiDensity || 'comfortable';
+            simpleMode = !!s?.simpleMode;
           }
         } catch (e) {
           console.warn('applyUIPreferences failed:', e);
         }
         this.setDensity(density);
+        this.setSimpleMode(simpleMode);
 
         // 即時更新（設定儲存後立即生效）
         if (!this._prefBound) {
           this._prefBound = true;
           window.addEventListener('settings:updated', (ev) => {
             this.setDensity(ev?.detail?.uiDensity);
+            this.setSimpleMode(!!ev?.detail?.simpleMode);
           });
         }
       }

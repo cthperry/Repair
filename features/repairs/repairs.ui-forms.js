@@ -12,26 +12,12 @@ Object.assign(RepairUI.prototype, {
    */
   renderForm() {
     const isEdit = !!this.currentRepair;
-
     // 新增模式要吃 AppConfig 預設值，否則 <select> 會落到第一個 option（目前是「低」）
-    const baseDefaults = {
+    const repair = this.currentRepair || {
       status: AppConfig.business.defaults.repairStatus,
       progress: AppConfig.business.defaults.progress,
       priority: AppConfig.business.defaults.priority
     };
-
-    // 新增模式可吃一次性預填（例如：詳情頁 📄 複製），但流程型欄位回到預設
-    let repair;
-    if (isEdit) {
-      repair = this.currentRepair;
-    } else {
-      const prefill = (this._newPrefill && typeof this._newPrefill === 'object') ? this._newPrefill : {};
-      repair = { ...baseDefaults, ...prefill };
-      repair.status = baseDefaults.status;
-      repair.progress = baseDefaults.progress;
-      repair.priority = baseDefaults.priority;
-    }
-
 
     // 注意：新增維修單不得帶入「上一次選擇」的預設值（避免造成誤填/誤判為內建值）
     // - 版本：V161.133 起取消 localStorage 的 recent defaults 行為
@@ -577,7 +563,7 @@ Object.assign(RepairUI.prototype, {
               <button class="btn" onclick="RepairUI.openForm('${repair.id}')">
                 ✏️ 編輯
               </button>
-              <button class="btn ghost" onclick="RepairUI.duplicateRepair('${repair.id}')">
+              <button class="btn" type="button" onclick="RepairUI.duplicateRepair('${repair.id}')" title="複製成新維修單">
                 📄 複製
               </button>
               <button class="btn danger" onclick="RepairUI.confirmDelete('${repair.id}')">
@@ -962,6 +948,8 @@ Object.assign(RepairUI.prototype, {
       // 表單輔助欄位（不寫入資料庫）
       delete data._machinePick;
       delete data._machineManual;
+      delete data._machineSearch;// P0：機型搜尋欄位不寫入資料庫
+
 
       // Checkbox（未勾選時 FormData 不會帶值）
       const boolVal = (name) => !!form.querySelector(`input[name="${name}"]`)?.checked;
@@ -977,42 +965,38 @@ Object.assign(RepairUI.prototype, {
       // 字串 trim（避免搜尋/顯示混亂）
       [
         'customer','contact','phone','email',
-        'productLine','machine','serialNumber','issue','notes'
+        'productLine','machine','serialNumber','issue','content','notes'
       ].forEach(k => {
         if (typeof data[k] === 'string') data[k] = data[k].trim();
       });
 
+      // P0：資料品質檢查（電話/Email）
+      const email = (data.email || '').toString().trim();
+      if (email) {
+        const okEmail = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
+        if (!okEmail) {
+          const msg = 'Email 格式不正確';
+          if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
+          else alert(msg);
+          try { form.querySelector('input[name="email"]')?.focus?.(); } catch (_) {}
+          return;
+        }
+      }
+      const phone = (data.phone || '').toString().trim();
+      if (phone) {
+        const digits = phone.replace(/[^0-9]/g, '');
+        const okPhone = digits.length >= 6 && digits.length <= 20;
+        if (!okPhone) {
+          const msg = '電話格式不正確（建議至少 6 碼數字）';
+          if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
+          else alert(msg);
+          try { form.querySelector('input[name="phone"]')?.focus?.(); } catch (_) {}
+          return;
+        }
+      }
+
       // 維修日期（YYYY-MM-DD）
       if (typeof data.createdDate === 'string') data.createdDate = data.createdDate.trim();
-
-      // P0：資料品質（選填欄位格式驗證）
-      try {
-        const phoneRaw = (data.phone || '').toString().trim();
-        if (phoneRaw) {
-          const digits = phoneRaw.replace(/[^0-9]/g, '');
-          if (digits.length < 6 || digits.length > 20) {
-            const msg = '電話格式不正確（請輸入 6～20 位數字，可含分機/符號）';
-            if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
-            else alert(msg);
-            try { form.querySelector('input[name="phone"]')?.focus?.(); } catch (_) {}
-            return;
-          }
-        }
-
-        const emailRaw = (data.email || '').toString().trim();
-        if (emailRaw) {
-          const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw);
-          if (!ok) {
-            const msg = 'Email 格式不正確（例：name@company.com）';
-            if (window.UI && typeof window.UI.toast === 'function') window.UI.toast(msg, { type: 'warning' });
-            else alert(msg);
-            try { form.querySelector('input[name="email"]')?.focus?.(); } catch (_) {}
-            return;
-          }
-        }
-      } catch (e) {
-        console.warn('data quality check failed:', e);
-      }
 
       if (!window.RepairService) throw new Error('RepairService not found');
 

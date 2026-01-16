@@ -14,9 +14,14 @@
     input: null,
     list: null,
     status: null,
+    filters: null,
     hotkey: null,
     activeIndex: 0,
     results: [],
+    allResults: [],
+    filterKey: 'all',
+    lastQuery: '',
+    recent: [],
     _debounce: null,
     _renderToken: 0,
     _prefetchPromise: null,
@@ -31,6 +36,88 @@
     orders:   { key: 'orders',   label: '訂單',   icon: '📦' },
     kb:       { key: 'kb',       label: '知識庫', icon: '📚' },
   };
+
+  // 顯示與排序的模組優先順序
+  const _routeOrderFull = ['repairs', 'quotes', 'orders', 'customers', 'parts', 'kb'];
+  const _routeOrderSimple = ['repairs', 'customers'];
+
+  function _isSimpleMode() {
+    try { return (document.body && document.body.dataset && document.body.dataset.mode === 'simple'); } catch (_) { return false; }
+  }
+
+  function _getRouteOrder() {
+    return _isSimpleMode() ? _routeOrderSimple : _routeOrderFull;
+  }
+
+  // ========================================
+  // 搜尋效能優化（不改資料、僅記憶體快取）
+  // - 使用 WeakMap 快取各資料列的 normalized 搜尋字串（避免重複字串拼接/正規化）
+  // - 使用 Top-N 插入維持前 60 筆最佳結果（避免大量 sort / slice）
+  // ========================================
+
+  const _SEARCH_LIMIT = 60;
+
+  const _textCache = {
+    repairs: new WeakMap(),
+    customers: new WeakMap(),
+    parts: new WeakMap(),
+    quotes: new WeakMap(),
+    orders: new WeakMap(),
+    kb: new WeakMap(),
+  };
+
+  function _cachedText(map, obj, builder) {
+    try {
+      if (!map || !obj || (typeof obj !== 'object' && typeof obj !== 'function')) return builder(obj);
+      const hit = map.get(obj);
+      if (typeof hit === 'string') return hit;
+      const next = builder(obj);
+      map.set(obj, next);
+      return next;
+    } catch (_) {
+      try {
+        return builder(obj);
+      } catch (_) {
+        return '';
+      }
+    }
+  }
+
+  function _cmpRank(a, b) {
+    const ds = (b._score || 0) - (a._score || 0);
+    if (ds !== 0) return ds;
+    const bt = String(b._time || '');
+    const at = String(a._time || '');
+    return bt.localeCompare(at);
+  }
+
+  function _pushTop(top, item) {
+    if (!item || !Array.isArray(top)) return;
+
+    // 快速淘汰：已滿且不優於最差者
+    if (top.length >= _SEARCH_LIMIT) {
+      const worst = top[top.length - 1];
+      if (_cmpRank(item, worst) >= 0) return;
+    }
+
+    // 插入排序（維持 top 由好到差）
+    let i = 0;
+    for (; i < top.length; i++) {
+      // comparator < 0 代表 item 應排在 top[i] 前面
+      if (_cmpRank(item, top[i]) < 0) break;
+    }
+    top.splice(i, 0, item);
+    if (top.length > _SEARCH_LIMIT) top.pop();
+  }
+
+  // 供 _get*SearchText 使用（避免每次建立陣列）
+  const _REPAIR_FIELDS = ['repairNo','serialNumber','companyName','contactName','contactPhone','contactEmail','title','issue','problem','description','notes','status'];
+  const _CUSTOMER_FIELDS = ['companyName','name','phone','email','title','department','notes','address'];
+  const _PART_FIELDS = ['mpn','name','vendor','maker','brand','model','notes','desc','description'];
+  const _QUOTE_FIELDS = ['quoteNo','companyName','contactName','serialNumber','repairId','notes','status'];
+  const _ORDER_FIELDS = ['orderNo','companyName','contactName','serialNumber','repairId','quoteId','notes','status'];
+  const _KB_FIELDS = ['title','question','answer','symptom','rootCause','solution','content','steps','notes'];
+
 
   function _isAuthed() {
     try {
@@ -83,6 +170,81 @@
     }
   }
 
+  // 最近搜尋（localStorage, per uid）
+  function _getUid() {
+    try {
+      if (window.currentUser && window.currentUser.uid) return String(window.currentUser.uid);
+    } catch (_) {}
+    try {
+      if (window.AppState && typeof window.AppState.getCurrentUser === 'function') {
+        const u = window.AppState.getCurrentUser();
+        if (u && u.uid) return String(u.uid);
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function _recentStorageKey() {
+    const uid = _getUid() || 'anon';
+    return `rt_gs_recent_${uid}`;
+  }
+
+  function _loadRecent() {
+    try {
+      const raw = localStorage.getItem(_recentStorageKey());
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter(Boolean).map(s => String(s)) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function _saveRecent(q) {
+    const query = String(q || '').replace(/[\u3000\s]+/g, ' ').trim();
+    if (!query) return;
+    const max = 8;
+    const cur = _state.recent && _state.recent.length ? _state.recent.slice() : _loadRecent();
+    const next = [query, ...cur.filter(x => String(x) !== query)].slice(0, max);
+    _state.recent = next;
+    try { localStorage.setItem(_recentStorageKey(), JSON.stringify(next)); } catch (_) {}
+  }
+
+  function _clearRecent() {
+    _state.recent = [];
+    try { localStorage.removeItem(_recentStorageKey()); } catch (_) {}
+  }
+
+  function _countByRoute(list) {
+    const counts = { total: 0 };
+    const arr = Array.isArray(list) ? list : [];
+    counts.total = arr.length;
+    for (const k of _getRouteOrder()) counts[k] = 0;
+    for (const r of arr) {
+      const k = r && r.route ? String(r.route) : '';
+      if (k && typeof counts[k] === 'number') counts[k] += 1;
+    }
+    return counts;
+  }
+
+  function _orderByRoute(list) {
+    const arr = Array.isArray(list) ? list : [];
+    const buckets = {};
+    for (const k of _getRouteOrder()) buckets[k] = [];
+    for (const r of arr) {
+      const k = r && r.route ? String(r.route) : '';
+      if (buckets[k]) buckets[k].push(r);
+    }
+    const out = [];
+    for (const k of _getRouteOrder()) out.push(...(buckets[k] || []));
+    return out;
+  }
+
+  function _applyFilter(list, key) {
+    const k = String(key || 'all');
+    if (k === 'all') return _orderByRoute(list);
+    return _orderByRoute((Array.isArray(list) ? list : []).filter(r => r && String(r.route) === k));
+  }
+
   function _buildOverlay() {
     if (_state.overlay) return;
     const el = document.createElement('div');
@@ -102,6 +264,7 @@
           <button class="btn ghost gs-close" data-gs="close" title="關閉 (Esc)">關閉</button>
         </div>
         <div class="gs-status" data-gs="status"></div>
+        <div class="gs-filters" data-gs="filters"></div>
         <div class="gs-list" data-gs="list"></div>
         <div class="gs-footer">
           <div class="muted">↑↓ 選擇 · Enter 開啟 · Esc 關閉</div>
@@ -114,6 +277,7 @@
     _state.input = el.querySelector('[data-gs="input"]');
     _state.list = el.querySelector('[data-gs="list"]');
     _state.status = el.querySelector('[data-gs="status"]');
+    _state.filters = el.querySelector('[data-gs="filters"]');
     _state.hotkey = el.querySelector('[data-gs="hotkey"]');
 
     // backdrop / close
@@ -121,6 +285,36 @@
     const closeBtn = el.querySelector('[data-gs="close"]');
     if (backdrop) backdrop.addEventListener('click', () => GlobalSearch.close());
     if (closeBtn) closeBtn.addEventListener('click', () => GlobalSearch.close());
+
+    // overlay key bindings (避免焦點離開 input 後熱鍵失效)
+    el.addEventListener('keydown', (e) => {
+      if (!_state.isOpen) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        GlobalSearch.close();
+        return;
+      }
+
+      // 當焦點在 input 時，讓 input 自己處理（避免重複觸發）
+      const onInput = (_state.input && e.target === _state.input);
+      if (onInput) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        GlobalSearch.move(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        GlobalSearch.move(-1);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        GlobalSearch.openActive();
+        return;
+      }
+    });
 
     // input handler
     if (_state.input) {
@@ -158,11 +352,37 @@
     // list click
     if (_state.list) {
       _state.list.addEventListener('click', async (ev) => {
+        const action = ev.target && ev.target.closest ? ev.target.closest('[data-gs-action]') : null;
+        if (action) {
+          const a = action.getAttribute('data-gs-action');
+          if (a === 'clear-recent') {
+            GlobalSearch.clearRecent();
+            return;
+          }
+        }
+
+        const recentBtn = ev.target && ev.target.closest ? ev.target.closest('[data-gs-recent]') : null;
+        if (recentBtn) {
+          const q = recentBtn.getAttribute('data-gs-recent') || '';
+          GlobalSearch.useRecent(q);
+          return;
+        }
+
         const row = ev.target && ev.target.closest ? ev.target.closest('[data-gs-idx]') : null;
         if (!row) return;
         const idx = Number(row.getAttribute('data-gs-idx'));
         if (!Number.isFinite(idx)) return;
         await GlobalSearch.openByIndex(idx);
+      });
+    }
+
+    // filters click
+    if (_state.filters) {
+      _state.filters.addEventListener('click', (ev) => {
+        const chip = ev.target && ev.target.closest ? ev.target.closest('[data-gs-filter]') : null;
+        if (!chip) return;
+        const key = chip.getAttribute('data-gs-filter') || 'all';
+        GlobalSearch.setFilter(key);
       });
     }
   }
@@ -178,14 +398,20 @@
         if (!ensure) return;
 
         // 只要資料層可用即可，UI/Controller 由跳轉時載入
-        await Promise.all([
+        const tasks = [
           ensure('RepairService', { loadAll: true }),
           ensure('CustomerService', { loadAll: true }),
-          ensure('PartService', { loadAll: true }),
-          ensure('QuoteService', { loadAll: true }),
-          ensure('OrderService', { loadAll: true }),
-          ensure('KBService', { loadAll: false }),
-        ]);
+        ];
+        if (! _isSimpleMode()) {
+          tasks.push(
+            ensure('PartService', { loadAll: true }),
+            ensure('QuoteService', { loadAll: true }),
+            ensure('OrderService', { loadAll: true }),
+            ensure('KBService', { loadAll: false }),
+          );
+        }
+        // 只要資料層可用即可，UI/Controller 由跳轉時載入
+        await Promise.all(tasks);
       } catch (e) {
         console.warn('GlobalSearch prefetch failed:', e);
       }
@@ -220,17 +446,79 @@
     return `${_escHtml(a)}<mark class="gs-mark">${_escHtml(b)}</mark>${_escHtml(c)}`;
   }
 
+  function _renderFiltersBar(query) {
+    if (!_state.filters) return;
+    const q = String(query || '').trim();
+    if (!q) {
+      _state.filters.innerHTML = '';
+      return;
+    }
+
+    const counts = _countByRoute(_state.allResults);
+    const total = counts.total || 0;
+
+    const chips = [];
+    chips.push(
+      `<button type="button" class="gs-chip ${_state.filterKey === 'all' ? 'active' : ''}" data-gs-filter="all">` +
+      `全部<span class="gs-chip-count">${_escHtml(total)}</span>` +
+      `</button>`
+    );
+    for (const k of _getRouteOrder()) {
+      const m = _meta[k] || { label: k, icon: '🔎' };
+      const n = (counts[k] || 0);
+      const disabled = n ? '' : 'disabled';
+      const active = (_state.filterKey === k) ? 'active' : '';
+      chips.push(
+        `<button type="button" class="gs-chip ${active} ${disabled}" data-gs-filter="${_escAttr(k)}" ${n ? '' : 'aria-disabled="true"'}>` +
+        `${_escHtml(m.icon)} ${_escHtml(m.label)}<span class="gs-chip-count">${_escHtml(n)}</span>` +
+        `</button>`
+      );
+    }
+    _state.filters.innerHTML = `<div class="gs-chip-row">${chips.join('')}</div>`;
+  }
+
+  function _renderRecentPanel() {
+    const recent = (_state.recent && _state.recent.length) ? _state.recent : _loadRecent();
+    _state.recent = recent;
+
+    const chips = recent.length
+      ? recent.map(q => `<button type="button" class="gs-recent-chip" data-gs-recent="${_escAttr(q)}">${_escHtml(q)}</button>`).join('')
+      : '<div class="muted">尚無最近搜尋</div>';
+
+    const clearBtn = recent.length
+      ? `<button type="button" class="btn ghost gs-recent-clear" data-gs-action="clear-recent">清除</button>`
+      : '';
+
+    return `
+      <div class="gs-recent">
+        <div class="gs-recent-head">
+          <div class="gs-recent-title">最近搜尋</div>
+          ${clearBtn}
+        </div>
+        <div class="gs-recent-chips">${chips}</div>
+        <div class="gs-hint muted">例如：公司名 / 序號 / 料號 / 報價/訂單號 / 關鍵字</div>
+      </div>
+    `;
+  }
+
   function _render(query) {
     if (!_state.list) return;
     const q = String(query || '').trim();
+
+    // 若目前 filter 不在允許清單，回到全部（避免簡易模式切換後顯示空白）
+    try {
+      const allowed = new Set(_getRouteOrder());
+      if (_state.filterKey && _state.filterKey !== 'all' && !allowed.has(_state.filterKey)) {
+        _state.filterKey = 'all';
+      }
+    } catch (_) {}
     const results = _state.results;
 
+    _renderFiltersBar(q);
+
     if (!q) {
-      _state.list.innerHTML = `
-        <div class="gs-empty">
-          <div class="muted">開始輸入關鍵字即可搜尋（例如：公司名、序號、料號、報價/訂單號）。</div>
-        </div>
-      `;
+      if (_state.filters) _state.filters.innerHTML = '';
+      _state.list.innerHTML = _renderRecentPanel();
       return;
     }
 
@@ -243,15 +531,26 @@
       return;
     }
 
+    const visibleCounts = _countByRoute(results);
+    let lastRoute = '';
     const rows = results.map((r, i) => {
-      const m = _meta[r.route] || { label: r.route, icon: '🔎' };
+      const route = String(r.route || '');
+      const m = _meta[route] || { label: route, icon: '🔎' };
       const active = (i === _state.activeIndex) ? 'active' : '';
       const titleHtml = _highlight(r.title, q);
       const subHtml = _highlight(r.subtitle, q);
-      return `
+
+      const header = (route && route !== lastRoute)
+        ? (() => {
+            lastRoute = route;
+            const n = visibleCounts[route] || 0;
+            return `<div class="gs-group"><div class="gs-group-title">${_escHtml(m.icon)} ${_escHtml(m.label)}</div><div class="gs-group-count">${_escHtml(n)}</div></div>`;
+          })()
+        : '';
+
+      return header + `
         <div class="gs-row ${active}" data-gs-idx="${i}" role="button" tabindex="0">
           <div class="gs-row-left">
-            <div class="gs-badge">${_escHtml(m.icon)} ${_escHtml(m.label)}</div>
             <div class="gs-text">
               <div class="gs-row-title">${titleHtml}</div>
               <div class="gs-row-sub">${subHtml}</div>
@@ -302,7 +601,7 @@
 
   function _getRepairSearchText(r) {
     const parts = [];
-    for (const k of ['repairNo','serialNumber','companyName','contactName','contactPhone','contactEmail','title','issue','problem','description','notes','status']) {
+    for (const k of _REPAIR_FIELDS) {
       if (r && r[k]) parts.push(String(r[k]));
     }
     return _norm(parts.join(' '));
@@ -310,7 +609,7 @@
 
   function _getCustomerSearchText(c) {
     const parts = [];
-    for (const k of ['companyName','name','phone','email','title','department','notes','address']) {
+    for (const k of _CUSTOMER_FIELDS) {
       if (c && c[k]) parts.push(String(c[k]));
     }
     return _norm(parts.join(' '));
@@ -318,7 +617,7 @@
 
   function _getPartSearchText(p) {
     const parts = [];
-    for (const k of ['mpn','name','vendor','maker','brand','model','notes','desc','description']) {
+    for (const k of _PART_FIELDS) {
       if (p && p[k]) parts.push(String(p[k]));
     }
     return _norm(parts.join(' '));
@@ -326,7 +625,7 @@
 
   function _getQuoteSearchText(q) {
     const parts = [];
-    for (const k of ['quoteNo','companyName','contactName','serialNumber','repairId','notes','status']) {
+    for (const k of _QUOTE_FIELDS) {
       if (q && q[k]) parts.push(String(q[k]));
     }
     return _norm(parts.join(' '));
@@ -334,7 +633,7 @@
 
   function _getOrderSearchText(o) {
     const parts = [];
-    for (const k of ['orderNo','companyName','contactName','serialNumber','repairId','quoteId','notes','status']) {
+    for (const k of _ORDER_FIELDS) {
       if (o && o[k]) parts.push(String(o[k]));
     }
     return _norm(parts.join(' '));
@@ -345,7 +644,7 @@
       if (it && it._search) return _norm(it._search);
     } catch (_) {}
     const parts = [];
-    for (const k of ['title','question','answer','symptom','rootCause','solution','content','steps','notes']) {
+    for (const k of _KB_FIELDS) {
       if (it && it[k]) parts.push(String(it[k]));
     }
     try {
@@ -359,25 +658,30 @@
     const tokens = q.split(' ').filter(Boolean).slice(0, 6);
     if (!tokens.length) return [];
 
-    const out = [];
+    const allowedRoutes = new Set(_getRouteOrder());
+
+
+    const top = [];
 
     // repairs
-    try {
+    if (allowedRoutes.has('repairs')) try {
       const rs = _svc('RepairService');
       const rows = (rs && typeof rs.getAll === 'function') ? rs.getAll() : (rs && Array.isArray(rs.repairs) ? rs.repairs : []);
       for (const r of (Array.isArray(rows) ? rows : [])) {
         if (!r || r.isDeleted) continue;
-        const text = _getRepairSearchText(r);
+        const text = _cachedText(_textCache.repairs, r, _getRepairSearchText);
         const sc = _score(text, tokens);
         if (sc < 0) continue;
         const title = `${r.repairNo || r.id || ''}${r.serialNumber ? ` · ${r.serialNumber}` : ''}${r.companyName ? ` · ${r.companyName}` : ''}`.trim();
         const subtitle = `${r.title || r.issue || r.problem || r.description || ''}`.trim() || (r.contactName ? `聯絡人：${r.contactName}` : '');
-        out.push({
+        _pushTop(top, {
           route: 'repairs',
           id: String(r.id || ''),
           title: title || `維修單 ${String(r.id || '').slice(0, 8)}`,
           subtitle: subtitle,
           trailing: _toDate(r.updatedAt || r.createdAt),
+          _text: text,
+          _boost: 10,
           _score: sc + 10,
           _time: String(r.updatedAt || r.createdAt || ''),
         });
@@ -385,22 +689,24 @@
     } catch (_) {}
 
     // customers
-    try {
+    if (allowedRoutes.has('customers')) try {
       const cs = _svc('CustomerService');
       const rows = (cs && typeof cs.getAll === 'function') ? cs.getAll() : (cs && Array.isArray(cs.customers) ? cs.customers : []);
       for (const c of (Array.isArray(rows) ? rows : [])) {
         if (!c || c.isDeleted) continue;
-        const text = _getCustomerSearchText(c);
+        const text = _cachedText(_textCache.customers, c, _getCustomerSearchText);
         const sc = _score(text, tokens);
         if (sc < 0) continue;
         const title = `${c.companyName || ''}${c.name ? ` · ${c.name}` : ''}`.trim() || (c.id ? `客戶 ${c.id}` : '客戶');
         const subtitle = `${c.phone ? `電話：${c.phone}` : ''}${(c.phone && c.email) ? ' · ' : ''}${c.email ? `Email：${c.email}` : ''}`.trim();
-        out.push({
+        _pushTop(top, {
           route: 'customers',
           id: String(c.id || ''),
           title,
           subtitle,
           trailing: _toDate(c.updatedAt || c.createdAt),
+          _text: text,
+          _boost: 8,
           _score: sc + 8,
           _time: String(c.updatedAt || c.createdAt || ''),
         });
@@ -408,22 +714,24 @@
     } catch (_) {}
 
     // parts
-    try {
+    if (allowedRoutes.has('parts')) try {
       const ps = _svc('PartService');
       const rows = (ps && typeof ps.getAll === 'function') ? ps.getAll() : (ps && Array.isArray(ps.parts) ? ps.parts : []);
       for (const p of (Array.isArray(rows) ? rows : [])) {
         if (!p || p.isDeleted) continue;
-        const text = _getPartSearchText(p);
+        const text = _cachedText(_textCache.parts, p, _getPartSearchText);
         const sc = _score(text, tokens);
         if (sc < 0) continue;
         const title = `${p.mpn || ''}${p.name ? ` · ${p.name}` : ''}`.trim() || (p.id ? `零件 ${p.id}` : '零件');
         const subtitle = `${p.vendor ? `Vendor：${p.vendor}` : ''}${(p.vendor && p.maker) ? ' · ' : ''}${p.maker ? `Maker：${p.maker}` : ''}`.trim();
-        out.push({
+        _pushTop(top, {
           route: 'parts',
           id: String(p.id || ''),
           title,
           subtitle,
           trailing: _toDate(p.updatedAt || p.createdAt),
+          _text: text,
+          _boost: 6,
           _score: sc + 6,
           _time: String(p.updatedAt || p.createdAt || ''),
         });
@@ -431,22 +739,24 @@
     } catch (_) {}
 
     // quotes
-    try {
+    if (allowedRoutes.has('quotes')) try {
       const qs = _svc('QuoteService');
       const rows = (qs && typeof qs.getAll === 'function') ? qs.getAll() : (qs && Array.isArray(qs.quotes) ? qs.quotes : []);
       for (const qx of (Array.isArray(rows) ? rows : [])) {
         if (!qx || qx.isDeleted) continue;
-        const text = _getQuoteSearchText(qx);
+        const text = _cachedText(_textCache.quotes, qx, _getQuoteSearchText);
         const sc = _score(text, tokens);
         if (sc < 0) continue;
         const title = `${qx.quoteNo || qx.id || ''}${qx.companyName ? ` · ${qx.companyName}` : ''}`.trim() || (qx.id ? `報價 ${qx.id}` : '報價');
         const subtitle = `${qx.serialNumber ? `序號：${qx.serialNumber}` : ''}${(qx.serialNumber && qx.contactName) ? ' · ' : ''}${qx.contactName ? `聯絡人：${qx.contactName}` : ''}`.trim();
-        out.push({
+        _pushTop(top, {
           route: 'quotes',
           id: String(qx.id || ''),
           title,
           subtitle,
           trailing: _toDate(qx.updatedAt || qx.createdAt),
+          _text: text,
+          _boost: 6,
           _score: sc + 6,
           _time: String(qx.updatedAt || qx.createdAt || ''),
         });
@@ -454,22 +764,24 @@
     } catch (_) {}
 
     // orders
-    try {
+    if (allowedRoutes.has('orders')) try {
       const os = _svc('OrderService');
       const rows = (os && typeof os.getAll === 'function') ? os.getAll() : (os && Array.isArray(os.orders) ? os.orders : []);
       for (const ox of (Array.isArray(rows) ? rows : [])) {
         if (!ox || ox.isDeleted) continue;
-        const text = _getOrderSearchText(ox);
+        const text = _cachedText(_textCache.orders, ox, _getOrderSearchText);
         const sc = _score(text, tokens);
         if (sc < 0) continue;
         const title = `${ox.orderNo || ox.id || ''}${ox.companyName ? ` · ${ox.companyName}` : ''}`.trim() || (ox.id ? `訂單 ${ox.id}` : '訂單');
         const subtitle = `${ox.serialNumber ? `序號：${ox.serialNumber}` : ''}${(ox.serialNumber && ox.quoteId) ? ' · ' : ''}${ox.quoteId ? `Quote：${ox.quoteId}` : ''}`.trim();
-        out.push({
+        _pushTop(top, {
           route: 'orders',
           id: String(ox.id || ''),
           title,
           subtitle,
           trailing: _toDate(ox.updatedAt || ox.createdAt),
+          _text: text,
+          _boost: 6,
           _score: sc + 6,
           _time: String(ox.updatedAt || ox.createdAt || ''),
         });
@@ -477,25 +789,27 @@
     } catch (_) {}
 
     // kb
-    try {
+    if (allowedRoutes.has('kb')) try {
       const ks = _svc('KBService');
       const types = ['faq', 'failure', 'sop', 'case'];
       for (const t of types) {
         const list = (ks && typeof ks.getAll === 'function') ? ks.getAll(t) : [];
         for (const it of (Array.isArray(list) ? list : [])) {
           if (!it || it.isDeleted) continue;
-          const text = _getKBSearchText(it);
+          const text = _cachedText(_textCache.kb, it, _getKBSearchText);
           const sc = _score(text, tokens);
           if (sc < 0) continue;
           const title = (it.title || it.question || it.symptom || it.id || '').toString();
           const subtitle = (Array.isArray(it.tags) && it.tags.length) ? `Tag：${it.tags.slice(0, 4).join(', ')}` : (it.updatedBy ? `更新：${it.updatedBy}` : '');
-          out.push({
+          _pushTop(top, {
             route: 'kb',
             id: String(it.id || ''),
             kbType: t,
             title: title || `知識庫 ${String(it.id || '').slice(0, 8)}`,
             subtitle,
             trailing: _toDate(it.updatedAt || it.createdAt),
+            _text: text,
+            _boost: 4,
             _score: sc + 4,
             _time: String(it.updatedAt || it.createdAt || ''),
           });
@@ -503,17 +817,7 @@
       }
     } catch (_) {}
 
-    // 排序：分數 desc，時間 desc
-    out.sort((a, b) => {
-      const ds = (b._score || 0) - (a._score || 0);
-      if (ds !== 0) return ds;
-      const bt = String(b._time || '');
-      const at = String(a._time || '');
-      return bt.localeCompare(at);
-    });
-
-    // 限制結果數量（避免卡頓）
-    return out.slice(0, 60);
+    return top;
   }
 
   async function _openResult(r) {
@@ -522,6 +826,18 @@
 
     const route = String(r.route || '').trim();
     if (!route) return;
+
+    // 簡易模式：避免開啟被隱藏的進階模組
+    try {
+      if (_isSimpleMode()) {
+        const allow = new Set(_routeOrderSimple);
+        if (!allow.has(route)) {
+          window.UI?.toast?.('簡易模式下此功能已隱藏，請至「設定」關閉簡易模式後再使用。', { type: 'warning' });
+          return;
+        }
+      }
+    } catch (_) {}
+
 
     try {
       await window.AppRouter.navigate(route);
@@ -562,6 +878,9 @@
       _buildOverlay();
       _state.ready = true;
 
+      // 預先載入最近搜尋（避免首次開啟空白）
+      try { _state.recent = _loadRecent(); } catch (_) {}
+
       // 視覺：Mac 使用 ⌘K（但仍支援 Ctrl+K）
       try {
         const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || '');
@@ -589,8 +908,11 @@
       _state.overlay.style.display = 'flex';
       _state.isOpen = true;
       _state.activeIndex = 0;
+      _state.filterKey = 'all';
+      _state.lastQuery = '';
+      _state.allResults = [];
+      try { _state.recent = _loadRecent(); } catch (_) {}
       _setResults([]);
-      _setStatus('載入中…');
       _render('');
 
       // 先 focus，再 prefetch（避免 focus 失敗）
@@ -614,6 +936,9 @@
       _state.isOpen = false;
       _setStatus('');
       _setResults([]);
+      _state.allResults = [];
+      _state.filterKey = 'all';
+      _state.lastQuery = '';
       try { if (_state.input) _state.input.value = ''; } catch (_) {}
     },
 
@@ -633,9 +958,16 @@
       if (!qn) {
         _setStatus('');
         _setResults([]);
+        _state.allResults = [];
+        _state.lastQuery = '';
+        _state.filterKey = 'all';
         _render('');
         return;
       }
+
+      _state.lastQuery = qn;
+      // 新搜尋預設回到「全部」
+      _state.filterKey = 'all';
 
       _setStatus('搜尋中…');
 
@@ -645,7 +977,8 @@
       try {
         const res = _buildResults(qn);
         if (token !== _state._renderToken) return;
-        _setResults(res);
+        _state.allResults = res;
+        _setResults(_applyFilter(res, _state.filterKey));
         _setStatus(res.length ? '' : '');
         _render(qn);
       } catch (e) {
@@ -658,8 +991,36 @@
       if (!_state.isOpen) return;
       const n = _state.results.length;
       if (!n) return;
-      _state.activeIndex = Math.max(0, Math.min(n - 1, _state.activeIndex + (delta || 0)));
+      let i = _state.activeIndex + (delta || 0);
+      if (i < 0) i = n - 1;
+      if (i >= n) i = 0;
+      _state.activeIndex = i;
       _render(_state.input ? _state.input.value : '');
+    },
+
+    setFilter(key) {
+      if (!_state.isOpen) return;
+      const k = String(key || 'all');
+      const next = (k === 'all' || _meta[k]) ? k : 'all';
+      if (_state.filterKey === next) return;
+      _state.filterKey = next;
+      _state.activeIndex = 0;
+      _setResults(_applyFilter(_state.allResults, _state.filterKey));
+      _render(_state.input ? _state.input.value : _state.lastQuery);
+      try { _state.input && _state.input.focus(); } catch (_) {}
+    },
+
+    useRecent(q) {
+      if (!_state.isOpen || !_state.input) return;
+      _state.input.value = String(q || '');
+      try { _state.input.focus(); _state.input.select(); } catch (_) {}
+      this.search(_state.input.value);
+    },
+
+    clearRecent() {
+      _clearRecent();
+      if (!_state.isOpen) return;
+      if (!_state.lastQuery) _render('');
     },
 
     async openActive() {
@@ -671,6 +1032,10 @@
       if (!Number.isFinite(i)) return;
       const r = _state.results[i];
       if (!r) return;
+      try {
+        const q = (_state.input ? _state.input.value : _state.lastQuery) || '';
+        _saveRecent(q);
+      } catch (_) {}
       this.close();
       await _openResult(r);
     }

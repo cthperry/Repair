@@ -19,6 +19,7 @@ Wayne_chang<wayne_chang@premtek.com.tw>;`;
 
       signature: '',
       uiDensity: 'comfortable', // comfortable / compact
+      simpleMode: false, // 簡易模式：隱藏進階模組/功能
       pinnedTopN: 8, // 顯示的釘選公司數量（Top N）
       pinnedCompanies: [], // 以公司名稱為主（同公司多聯絡人也算同一個釘選）
       recentCompaniesLimit: 8, // 建單時「最近使用」公司顯示數量
@@ -90,6 +91,8 @@ Wayne_chang<wayne_chang@premtek.com.tw>;`;
       weeklyRecipients: String(raw.weeklyRecipients ?? d.weeklyRecipients ?? '').trim(),
       signature: String(raw.signature ?? d.signature ?? '').trim(),
       uiDensity: (raw.uiDensity === 'compact') ? 'compact' : 'comfortable',
+      simpleMode: !!(raw.simpleMode),
+
 
       pinnedTopN,
       pinnedCompanies,
